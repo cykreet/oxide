@@ -1,0 +1,19 @@
+[package]
+name = "oxide"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+calamine = "0.30.0"
+eframe = "0.32.1"
+memmap2 = "0.9.8"
+native-dialog = "0.9.0"
+object = "0.37.3"
+rfd = "0.15.4"
+serde = "1.0.219"
+
+[build-dependencies]
+winresource = "0.1.23"
+
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = ["winbase"] }
