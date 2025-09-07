@@ -20,7 +20,8 @@ static mut INPUT_DIR_BYTES: [u8; 260] = [0; 260];
 #[unsafe(link_section = "outfil")]
 static mut OUTPUT_FILE_BYTES: [u8; 260] = [0; 260];
 
-// todo: move to ui
+// todo: move to ui, we'll also then probably embed these into the binary
+// at which point, we might want to use a single section for all properties
 const DATA_START_ID: &str = "Hole Number";
 const DATA_END_ID: &str = "Sub-Totals";
 const REMARKS_START_ID: &str = "Remarks";
@@ -67,97 +68,6 @@ impl App {
 			state.output_file = new_file;
 		}
 	}
-}
-
-fn main() -> eframe::Result {
-	// read configured paths from binary sections
-	// blame: https://blog.dend.ro/self-modifying-rust/
-	let input_dir_bytes = unsafe { INPUT_DIR_BYTES };
-	let output_file_bytes = unsafe { OUTPUT_FILE_BYTES };
-
-	let input_dir_string = String::from_utf8_lossy(&input_dir_bytes);
-	let input_dir = input_dir_string.trim_end_matches(char::from(0)).to_owned();
-	let output_file_string = String::from_utf8_lossy(&output_file_bytes);
-	let output_file = output_file_string
-		.trim_end_matches(char::from(0))
-		.to_owned();
-
-	let options = eframe::NativeOptions {
-		viewport: egui::ViewportBuilder::default()
-			.with_inner_size([320.0, 480.0])
-			.with_min_inner_size([320.0, 480.0]),
-		..Default::default()
-	};
-
-	let (app, shared_state) = App::new(input_dir, output_file);
-	let native_result = eframe::run_native("oxide", options, Box::new(|_cc| Ok(Box::new(app))));
-
-	let final_state = shared_state.lock().unwrap().clone();
-	let sections = [
-		("inptdir", &final_state.input_dir as &str),
-		("outfil", &final_state.output_file as &str),
-	];
-
-	update_binary(&sections);
-	native_result
-}
-
-fn update_binary(sections: &[(&str, &str)]) {
-	let exe_path = env::current_exe().unwrap();
-	let tmp = exe_path.with_extension("tmp");
-	fs::copy(&exe_path, &tmp).unwrap();
-
-	let file = OpenOptions::new()
-		.read(true)
-		.write(true)
-		.open(&tmp)
-		.unwrap();
-	let mut buf = unsafe { memmap2::MmapOptions::new().map_mut(&file) }.unwrap();
-
-	let mut section_updates = Vec::new();
-	{
-		let parsed_file = object::File::parse(&*buf).unwrap();
-		for (section_name, data) in sections {
-			if let Some((offset, size)) = get_section(&parsed_file, section_name) {
-				section_updates.push((offset as usize, size as usize, *data));
-			}
-		}
-	}
-
-	let has_updates = section_updates.is_empty().not();
-	for (offset, size, data) in &section_updates {
-		buf[*offset..(*offset + *size)].fill(0);
-		buf[*offset..*offset + data.len()].copy_from_slice(data.as_bytes());
-	}
-
-	if has_updates {
-		let perms = fs::metadata(&exe_path).unwrap().permissions();
-		let old = env::temp_dir().join(format!(
-			"{}.old",
-			exe_path.file_name().unwrap().to_string_lossy()
-		));
-
-		fs::set_permissions(&tmp, perms.clone()).unwrap();
-		// can't just overwrite running exe on windows, so move/rename
-		// to temp and then rename back
-		fs::rename(&exe_path, &old).unwrap();
-		fs::rename(&tmp, &exe_path).unwrap();
-		fs::set_permissions(&exe_path, perms).unwrap();
-	} else {
-		fs::remove_file(&tmp).unwrap();
-	}
-}
-
-fn get_section(file: &object::File, name: &str) -> Option<(u64, u64)> {
-	for section in file.sections() {
-		match section.name() {
-			Ok(n) if n == name => {
-				return section.file_range();
-			}
-			_ => {}
-		}
-	}
-	None
 }
 
 impl eframe::App for App {
@@ -364,4 +274,98 @@ fn format_header(header: String) -> String {
 		.replace(" ", "_")
 		.replace("-", "_")
 		.replace("\n", "_")
+}
+
+fn update_binary(sections: &[(&str, &str)]) {
+	let exe_path = env::current_exe().unwrap();
+	let tmp = exe_path.with_extension("tmp");
+	fs::copy(&exe_path, &tmp).unwrap();
+
+	let file = OpenOptions::new()
+		.read(true)
+		.write(true)
+		.open(&tmp)
+		.unwrap();
+	let mut buf = unsafe { memmap2::MmapOptions::new().map_mut(&file) }.unwrap();
+
+	let mut section_updates = Vec::new();
+	{
+		let parsed_file = object::File::parse(&*buf).unwrap();
+		for (section_name, data) in sections {
+			if let Some((offset, size)) = get_section(&parsed_file, section_name) {
+				section_updates.push((offset as usize, size as usize, *data));
+			}
+		}
+	}
+
+	let has_updates = section_updates.is_empty().not();
+	for (offset, size, data) in &section_updates {
+		buf[*offset..(*offset + *size)].fill(0);
+		buf[*offset..*offset + data.len()].copy_from_slice(data.as_bytes());
+	}
+
+	if has_updates {
+		let perms = fs::metadata(&exe_path).unwrap().permissions();
+		let old = env::temp_dir().join(exe_path.with_extension("old"));
+
+		fs::set_permissions(&tmp, perms.clone()).unwrap();
+		// can't just overwrite running exe on windows, so move/rename
+		// to temp and then rename back
+		fs::rename(&exe_path, &old).unwrap();
+		fs::rename(&tmp, &exe_path).unwrap();
+		fs::set_permissions(&exe_path, perms).unwrap();
+	} else {
+		fs::remove_file(&tmp).unwrap();
+	}
+}
+
+fn get_section(file: &object::File, name: &str) -> Option<(u64, u64)> {
+	for section in file.sections() {
+		match section.name() {
+			Ok(n) if n == name => {
+				return section.file_range();
+			}
+			_ => {}
+		}
+	}
+	None
+}
+
+fn main() -> eframe::Result {
+	// clean up old temp file
+	let old_path = env::current_exe().unwrap().with_extension("old");
+	let old_path = env::temp_dir().join(old_path);
+	if old_path.exists() {
+		let _ = fs::remove_file(old_path);
+	}
+
+	// read configured paths from binary sections
+	// blame: https://blog.dend.ro/self-modifying-rust/
+	let input_dir_bytes = unsafe { INPUT_DIR_BYTES };
+	let output_file_bytes = unsafe { OUTPUT_FILE_BYTES };
+
+	let input_dir_string = String::from_utf8_lossy(&input_dir_bytes);
+	let input_dir = input_dir_string.trim_end_matches(char::from(0)).to_owned();
+	let output_file_string = String::from_utf8_lossy(&output_file_bytes);
+	let output_file = output_file_string
+		.trim_end_matches(char::from(0))
+		.to_owned();
+
+	let options = eframe::NativeOptions {
+		viewport: egui::ViewportBuilder::default()
+			.with_inner_size([320.0, 480.0])
+			.with_min_inner_size([320.0, 480.0]),
+		..Default::default()
+	};
+
+	let (app, shared_state) = App::new(input_dir, output_file);
+	let native_result = eframe::run_native("oxide", options, Box::new(|_cc| Ok(Box::new(app))));
+	let final_state = shared_state.lock().unwrap().clone();
+	let sections = [
+		("inptdir", &final_state.input_dir as &str),
+		("outfil", &final_state.output_file as &str),
+	];
+
+	update_binary(&sections);
+	native_result
 }
