@@ -223,7 +223,7 @@ fn generate_output(
 								.get(i)
 								.and_then(|sc| sc.as_string())
 								.unwrap_or_default();
-							if !sub_header.is_empty() {
+							if sub_header.is_empty().not() {
 								return format_header(format!("{}_{}", main_header, sub_header));
 							}
 
@@ -287,24 +287,27 @@ fn update_binary(sections: &[(&str, &str)]) {
 		.open(&tmp)
 		.unwrap();
 	let mut buf = unsafe { memmap2::MmapOptions::new().map_mut(&file) }.unwrap();
-
 	let mut section_updates = Vec::new();
 	{
 		let parsed_file = object::File::parse(&*buf).unwrap();
 		for (section_name, data) in sections {
 			if let Some((offset, size)) = get_section(&parsed_file, section_name) {
+				let section_data = &buf[offset as usize..(offset + size) as usize];
+				if data.as_bytes() == section_data {
+					continue;
+				}
+
 				section_updates.push((offset as usize, size as usize, *data));
 			}
 		}
 	}
 
-	let has_updates = section_updates.is_empty().not();
-	for (offset, size, data) in &section_updates {
-		buf[*offset..(*offset + *size)].fill(0);
-		buf[*offset..*offset + data.len()].copy_from_slice(data.as_bytes());
-	}
+	if section_updates.is_empty().not() {
+		for (offset, size, data) in &section_updates {
+			buf[*offset..(*offset + *size)].fill(0);
+			buf[*offset..*offset + data.len()].copy_from_slice(data.as_bytes());
+		}
 
-	if has_updates {
 		let perms = fs::metadata(&exe_path).unwrap().permissions();
 		let old = env::temp_dir().join(exe_path.with_extension("old"));
 
