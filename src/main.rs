@@ -83,7 +83,7 @@ impl eframe::App for App {
 					}
 
 					if self.input_dir.is_empty().not() {
-						ui.label(&self.input_dir.to_string());
+						ui.label(ellipse_string(&self.input_dir, 30));
 					}
 				});
 
@@ -96,7 +96,7 @@ impl eframe::App for App {
 					}
 
 					if self.output_file.is_empty().not() {
-						ui.label(&self.output_file.to_string());
+						ui.label(&ellipse_string(&self.output_file, 30));
 					}
 				});
 
@@ -126,8 +126,9 @@ impl eframe::App for App {
 					});
 				}
 
-				ui.add_space(20.0);
+				ui.add_space(ui.max_rect().height() - ui.cursor().top() - 20.0);
 				let generate_button = egui::Button::new("Export");
+
 				if self.output_file.is_empty().not() && self.input_dir.is_empty().not() {
 					if ui.button("Generate").clicked() {
 						match generate_output(self.input_dir.to_string(), self.output_file.to_string()) {
@@ -261,6 +262,16 @@ fn generate_output(
 					writeln!(&output_file, ",{}", report_date)?;
 				}
 			}
+
+			if table_header_row == -1 {
+				return Err(
+					format!(
+						"Failed to find table header in worksheet: {}",
+						worksheet_name
+					)
+					.into(),
+				);
+			}
 		}
 	}
 
@@ -291,6 +302,10 @@ fn update_binary(sections: &[(&str, &str)]) {
 	{
 		let parsed_file = object::File::parse(&*buf).unwrap();
 		for (section_name, data) in sections {
+			if data.is_empty() {
+				continue;
+			}
+
 			if let Some((offset, size)) = get_section(&parsed_file, section_name) {
 				let section_data = &buf[offset as usize..(offset + size) as usize];
 				if data.as_bytes() == section_data {
@@ -308,17 +323,36 @@ fn update_binary(sections: &[(&str, &str)]) {
 			buf[*offset..*offset + data.len()].copy_from_slice(data.as_bytes());
 		}
 
-		let perms = fs::metadata(&exe_path).unwrap().permissions();
-		let old = env::temp_dir().join(exe_path.with_extension("old"));
+		#[cfg(unix)]
+		{
+			let perms = fs::metadata(&exe_path).unwrap().permissions();
+			fs::set_permissions(&tmp, perms.clone()).unwrap();
+			fs::rename(&tmp, &exe_path).unwrap();
+			fs::set_permissions(&exe_path, perms).unwrap();
+		}
 
-		fs::set_permissions(&tmp, perms.clone()).unwrap();
-		// can't just overwrite running exe on windows, so move/rename
-		// to temp and then rename back
-		fs::rename(&exe_path, &old).unwrap();
-		fs::rename(&tmp, &exe_path).unwrap();
-		fs::set_permissions(&exe_path, perms).unwrap();
+		#[cfg(windows)]
+		{
+			let perms = fs::metadata(&exe_path).unwrap().permissions();
+			let old = env::temp_dir().join(exe_path.with_extension("old"));
+
+			fs::set_permissions(&tmp, perms.clone()).unwrap();
+			// can't just overwrite running exe on windows, so move/rename
+			// to temp and then rename back
+			fs::rename(&exe_path, &old).unwrap();
+			fs::rename(&tmp, &exe_path).unwrap();
+			fs::set_permissions(&exe_path, perms).unwrap();
+		}
 	} else {
 		fs::remove_file(&tmp).unwrap();
+	}
+}
+
+fn ellipse_string(s: &str, max_len: usize) -> String {
+	if s.len() <= max_len {
+		s.to_string()
+	} else {
+		format!("{}...", &s[..max_len])
 	}
 }
 

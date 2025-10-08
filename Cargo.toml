@@ -9,7 +9,7 @@ eframe = "0.32.1"
 memmap2 = "0.9.8"
 native-dialog = "0.9.0"
 object = "0.37.3"
-rfd = "0.15.4"
+rfd = { version = "0.15.4", default-features = false, features = ["gtk3"] }
 serde = "1.0.219"
 
 [build-dependencies]
